@@ -1,10 +1,31 @@
 services:
   - type: web
+    name: trulypdf-argos-api
+    env: python
+    plan: free
+    rootDir: backend
+    buildCommand: pip install -r requirements.txt && python prewarm_models.py
+    startCommand: python app.py
+    healthCheckPath: /api/health
+    envVars:
+      - key: ARGOS_PREWARM_BUILD_PAIRS
+        value: en-hi,hi-en,en-es,es-en,en-fr,fr-en
+      - key: ARGOS_PREWARM_PAIRS
+        value: en-hi,hi-en,en-es,es-en,en-fr,fr-en
+      - key: ARGOS_TRANSLATE_TIMEOUT_SEC
+        value: "45"
+      - key: ARGOS_TRANSLATE_RETRIES
+        value: "2"
+
+  - type: web
     name: trulypdf
     env: static
     plan: free
     buildCommand: npm install && npm run build
     staticPublishPath: dist
+    envVars:
+      - key: VITE_TRANSLATE_API_URL
+        sync: false
     routes:
       - type: rewrite
         source: /*

@@ -59,6 +59,27 @@ const tools = [
   { title: 'Translate PDF', slug: 'translate-pdf', description: 'Translate PDF files while preserving structure and readability.', icon: 'translate', category: 'convert', isNew: true },
 ]
 
+const fallbackTranslateLanguages = [
+  { code: 'auto', label: 'Detect language' },
+  { code: 'en', label: 'English' },
+  { code: 'es', label: 'Spanish' },
+  { code: 'fr', label: 'French' },
+  { code: 'de', label: 'German' },
+  { code: 'it', label: 'Italian' },
+  { code: 'pt', label: 'Portuguese' },
+  { code: 'ru', label: 'Russian' },
+  { code: 'ar', label: 'Arabic' },
+  { code: 'hi', label: 'Hindi' },
+  { code: 'bn', label: 'Bengali' },
+  { code: 'ja', label: 'Japanese' },
+  { code: 'ko', label: 'Korean' },
+  { code: 'zh', label: 'Chinese' },
+  { code: 'tr', label: 'Turkish' },
+  { code: 'nl', label: 'Dutch' },
+  { code: 'pl', label: 'Polish' },
+  { code: 'uk', label: 'Ukrainian' },
+]
+
 function ToolGlyph({ type }) {
   const glyphs = {
     merge: '⇄',
@@ -192,6 +213,19 @@ function App() {
   const [organizeDragIndex, setOrganizeDragIndex] = useState(null)
   const [organizeBaseSize, setOrganizeBaseSize] = useState({ width: 595, height: 842 })
   const [organizeSortDirection, setOrganizeSortDirection] = useState('asc')
+  const [aiSummaryPrompt, setAiSummaryPrompt] = useState('Summarize this file in simple language.')
+  const [aiSummaryMessages, setAiSummaryMessages] = useState([
+    {
+      id: `assistant-${Date.now()}`,
+      role: 'assistant',
+      text: 'Upload a file and ask for the summary style you want.',
+    },
+  ])
+  const [translateSourceLang, setTranslateSourceLang] = useState('auto')
+  const [translateTargetLang, setTranslateTargetLang] = useState('en')
+  const [translateStatus, setTranslateStatus] = useState('')
+  const [translatedText, setTranslatedText] = useState('')
+  const [translateLanguages, setTranslateLanguages] = useState(fallbackTranslateLanguages)
   const [rotateAnglesByFile, setRotateAnglesByFile] = useState({})
   const [rotateSelectedIndex, setRotateSelectedIndex] = useState(0)
   const [rotateBusy, setRotateBusy] = useState(false)
@@ -400,7 +434,56 @@ function App() {
     setEditSelectedObjectId('')
     setEditPendingImageData('')
     setEditStatus('')
+    setAiSummaryPrompt('Summarize this file in simple language.')
+    setAiSummaryMessages([
+      {
+        id: `assistant-${Date.now()}`,
+        role: 'assistant',
+        text: 'Upload a file and ask for the summary style you want.',
+      },
+    ])
+    setTranslateSourceLang('auto')
+    setTranslateTargetLang('en')
+    setTranslateStatus('')
+    setTranslatedText('')
+    setTranslateLanguages(fallbackTranslateLanguages)
   }, [activeTool?.slug])
+
+  useEffect(() => {
+    if (activeTool?.slug !== 'translate-pdf') return
+    let cancelled = false
+    ;(async () => {
+      try {
+        const res = await fetch(`${getTranslateApiBase()}/languages`)
+        if (!res.ok) return
+        const data = await res.json()
+        const rows = Array.isArray(data?.languages) ? data.languages : []
+        if (!rows.length || cancelled) return
+
+        const mapped = rows.map((lang) => ({
+          code: String(lang.code || '').trim(),
+          label: String(lang.name || lang.code || '').trim(),
+          targets: Array.isArray(lang.targets) ? lang.targets.map((t) => String(t).trim()) : [],
+        })).filter((lang) => lang.code && lang.label)
+
+        const options = [
+          { code: 'auto', label: 'Detect language', targets: mapped.map((lang) => lang.code) },
+          ...mapped,
+        ]
+        setTranslateLanguages(options)
+
+        if (!options.some((lang) => lang.code === translateTargetLang)) {
+          const firstTarget = mapped.find((lang) => lang.code !== 'auto')?.code || 'en'
+          setTranslateTargetLang(firstTarget)
+        }
+      } catch {
+        // Keep fallback list when API is unavailable.
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [activeTool?.slug, translateTargetLang])
 
   useEffect(() => {
     if (!scanPages.length) {
@@ -617,6 +700,24 @@ function App() {
     )
   }
 
+  const isSummarizerFile = (file) => {
+    if (!file) return false
+    const lowerName = file.name?.toLowerCase() || ''
+    const mime = file.type || ''
+    return (
+      isPdfFile(file) ||
+      isWordFile(file) ||
+      isPowerPointFile(file) ||
+      isExcelFile(file) ||
+      mime.startsWith('text/') ||
+      mime === 'application/json' ||
+      lowerName.endsWith('.txt') ||
+      lowerName.endsWith('.md') ||
+      lowerName.endsWith('.rtf') ||
+      lowerName.endsWith('.json')
+    )
+  }
+
   const allowedInputAccept = activeTool?.slug === 'word-to-pdf'
     ? '.doc,.docx,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document'
     : activeTool?.slug === 'powerpoint-to-pdf'
@@ -625,6 +726,8 @@ function App() {
         ? '.xls,.xlsx,.csv,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/csv'
         : activeTool?.slug === 'jpg-to-pdf'
           ? '.jpg,.jpeg,.png,image/jpeg,image/png'
+        : activeTool?.slug === 'ai-summarizer'
+          ? '.pdf,.txt,.md,.doc,.docx,.ppt,.pptx,.xls,.xlsx,.csv,.json,text/*,application/json,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.ms-powerpoint,application/vnd.openxmlformats-officedocument.presentationml.presentation,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/csv'
         : '.pdf,application/pdf'
 
   const selectFileLabel = activeTool?.slug === 'word-to-pdf'
@@ -635,6 +738,8 @@ function App() {
         ? 'Select EXCEL file'
         : activeTool?.slug === 'jpg-to-pdf'
           ? 'Select JPG file'
+        : activeTool?.slug === 'ai-summarizer'
+          ? 'Upload file to summarize'
         : 'Select PDF file'
   const dropHintLabel = activeTool?.slug === 'word-to-pdf'
     ? 'or drop WORD here'
@@ -644,6 +749,8 @@ function App() {
         ? 'or drop EXCEL here'
         : activeTool?.slug === 'jpg-to-pdf'
           ? 'or drop JPG here'
+        : activeTool?.slug === 'ai-summarizer'
+          ? 'or drop PDF/DOC/PPT/XLS/TXT here'
         : 'or drop PDF here'
 
   const addFiles = (incomingFiles) => {
@@ -670,6 +777,7 @@ function App() {
       if (activeTool?.slug === 'powerpoint-to-pdf') return isPowerPointFile(file)
       if (activeTool?.slug === 'excel-to-pdf') return isExcelFile(file)
       if (activeTool?.slug === 'jpg-to-pdf') return isImageFile(file)
+      if (activeTool?.slug === 'ai-summarizer') return isSummarizerFile(file)
       return isPdfFile(file)
     })
     if (!candidates.length) {
@@ -970,6 +1078,10 @@ function App() {
 
   const convertLabel = activeTool?.slug === 'merge-pdf'
     ? 'Merge PDF'
+    : activeTool?.slug === 'ai-summarizer'
+      ? 'Generate summary'
+    : activeTool?.slug === 'translate-pdf'
+      ? 'Translate'
     : activeTool?.slug === 'word-to-pdf' || activeTool?.slug === 'powerpoint-to-pdf' || activeTool?.slug === 'excel-to-pdf' || activeTool?.slug === 'jpg-to-pdf'
       ? 'Convert to PDF'
     : toolShortName
@@ -982,6 +1094,264 @@ function App() {
     }
     setMergedFileUrl('')
     setMergedFileName('')
+  }
+
+  const decodeXmlEntities = (text) =>
+    String(text || '')
+      .replace(/&amp;/g, '&')
+      .replace(/&lt;/g, '<')
+      .replace(/&gt;/g, '>')
+      .replace(/&quot;/g, '"')
+      .replace(/&apos;/g, "'")
+      .replace(/&#(\d+);/g, (_, num) => String.fromCharCode(Number(num)))
+      .replace(/&#x([0-9a-fA-F]+);/g, (_, hex) => String.fromCharCode(parseInt(hex, 16)))
+
+  const extractTextForSummarizer = async (file) => {
+    const raw = await file.arrayBuffer()
+    const bytes = new Uint8Array(raw)
+    const lowerName = file.name?.toLowerCase() || ''
+
+    if (isPdfFile(file)) {
+      const pdf = await pdfjsLib.getDocument({ data: bytes }).promise
+      const pages = []
+      for (let pageNum = 1; pageNum <= pdf.numPages; pageNum += 1) {
+        const page = await pdf.getPage(pageNum)
+        const content = await page.getTextContent()
+        const pageText = content.items
+          .map((item) => (typeof item.str === 'string' ? item.str.trim() : ''))
+          .filter(Boolean)
+          .join(' ')
+        if (pageText) pages.push(`Page ${pageNum}: ${pageText}`)
+      }
+      return pages.join('\n')
+    }
+
+    if (isWordFile(file)) {
+      const isZipDocx = bytes.length >= 4
+        && bytes[0] === 0x50
+        && bytes[1] === 0x4b
+        && (bytes[2] === 0x03 || bytes[2] === 0x05 || bytes[2] === 0x07)
+        && (bytes[3] === 0x04 || bytes[3] === 0x06 || bytes[3] === 0x08)
+      if (isZipDocx) {
+        const { value } = await mammoth.extractRawText({ arrayBuffer: raw })
+        return String(value || '')
+      }
+      let decoded = new TextDecoder('utf-8', { fatal: false }).decode(bytes)
+      if (decoded.includes('\u0000')) {
+        decoded = new TextDecoder('utf-16le', { fatal: false }).decode(bytes)
+      }
+      const container = document.createElement('div')
+      container.innerHTML = decoded
+      return String(container.textContent || decoded || '')
+    }
+
+    if (isPowerPointFile(file)) {
+      const isZip = bytes.length >= 4
+        && bytes[0] === 0x50
+        && bytes[1] === 0x4b
+        && (bytes[2] === 0x03 || bytes[2] === 0x05 || bytes[2] === 0x07)
+        && (bytes[3] === 0x04 || bytes[3] === 0x06 || bytes[3] === 0x08)
+      if (isZip) {
+        const zip = await JSZip.loadAsync(raw)
+        const slideEntries = Object.keys(zip.files)
+          .filter((name) => /^ppt\/slides\/slide\d+\.xml$/.test(name))
+          .sort((a, b) => Number(a.match(/slide(\d+)\.xml$/)?.[1] || 0) - Number(b.match(/slide(\d+)\.xml$/)?.[1] || 0))
+        const slides = []
+        for (const entry of slideEntries) {
+          const xml = await zip.file(entry).async('text')
+          const paragraphMatches = xml.match(/<a:p[\s\S]*?<\/a:p>/g) || []
+          const lines = paragraphMatches
+            .map((paragraph) => [...paragraph.matchAll(/<a:t[^>]*>([\s\S]*?)<\/a:t>/g)].map((m) => decodeXmlEntities(m[1])).join(' '))
+            .map((line) => line.replace(/\s+/g, ' ').trim())
+            .filter(Boolean)
+          if (lines.length) slides.push(lines.join('\n'))
+        }
+        return slides.join('\n\n')
+      }
+    }
+
+    if (isExcelFile(file)) {
+      const workbook = XLSX.read(raw, { type: 'array' })
+      const sheetNames = workbook.SheetNames || []
+      const chunks = []
+      sheetNames.forEach((sheetName) => {
+        const sheet = workbook.Sheets[sheetName]
+        const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, raw: false, defval: '' })
+        const rowText = rows
+          .map((row) => row.map((cell) => String(cell ?? '').trim()).filter(Boolean).join(' | '))
+          .filter(Boolean)
+          .join('\n')
+        if (rowText) chunks.push(`Sheet: ${sheetName}\n${rowText}`)
+      })
+      return chunks.join('\n\n')
+    }
+
+    const text = new TextDecoder('utf-8', { fatal: false }).decode(bytes)
+    if (lowerName.endsWith('.json')) {
+      try {
+        return JSON.stringify(JSON.parse(text), null, 2)
+      } catch {
+        return text
+      }
+    }
+    return text
+  }
+
+  const requestGeminiSummary = async ({ apiKey, prompt }) => {
+    const models = [
+      'gemini-1.5-pro',
+      'gemini-1.5-flash',
+      'gemini-2.5-flash',
+    ]
+    let lastError = 'Unknown Gemini error.'
+    for (const model of models) {
+      for (let attempt = 1; attempt <= 3; attempt += 1) {
+        const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(apiKey)}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            contents: [{ parts: [{ text: prompt }] }],
+          }),
+        })
+
+        if (response.ok) {
+          const data = await response.json()
+          const summary = (data?.candidates?.[0]?.content?.parts || [])
+            .map((part) => (typeof part?.text === 'string' ? part.text : ''))
+            .join('\n')
+            .trim()
+          if (summary) {
+            return { summary, model }
+          }
+          lastError = `Model ${model} returned empty output.`
+          break
+        }
+
+        const errText = await response.text()
+        lastError = `Gemini request failed (${response.status}) on ${model}: ${errText || 'unknown error'}`
+        if (response.status !== 503) {
+          break
+        }
+        await new Promise((resolve) => setTimeout(resolve, 600 * attempt))
+      }
+    }
+    throw new Error(lastError)
+  }
+
+  const downloadSummaryChat = () => {
+    const chatText = aiSummaryMessages
+      .map((msg) => `${msg.role === 'user' ? 'User' : 'Assistant'}:\n${msg.text}`)
+      .join('\n\n')
+      .trim()
+    if (!chatText) {
+      window.alert('No chat messages to download yet.')
+      return
+    }
+    const fileName = `ai-summary-chat-${Date.now()}.txt`
+    downloadBlob(new Blob([chatText], { type: 'text/plain;charset=utf-8' }), fileName)
+  }
+
+  const getTranslateApiBase = () => {
+    const endpoint = (import.meta.env.VITE_TRANSLATE_API_URL || 'http://localhost:5000/api/translate').trim()
+    return endpoint.replace(/\/translate\/?$/i, '')
+  }
+
+  const downloadTranslatedResult = () => {
+    if (!translatedText.trim()) {
+      window.alert('No translated text available yet.')
+      return
+    }
+    const sourceFile = selectedFiles[0]
+    const baseName = sourceFile?.name?.replace(/\.[^/.]+$/i, '') || 'translated'
+    const fileName = `${baseName}-${translateTargetLang}.txt`
+    downloadBlob(new Blob([translatedText], { type: 'text/plain;charset=utf-8' }), fileName)
+  }
+
+  const splitTextForTranslate = (text, maxLen = 1800) => {
+    const normalized = String(text || '').replace(/\r/g, '').trim()
+    if (!normalized) return []
+    if (normalized.length <= maxLen) return [normalized]
+    const paragraphs = normalized.split(/\n{2,}/).map((part) => part.trim()).filter(Boolean)
+    const chunks = []
+    let bucket = ''
+    for (const para of paragraphs) {
+      if (!bucket) {
+        bucket = para
+        continue
+      }
+      if ((bucket.length + 2 + para.length) <= maxLen) {
+        bucket += `\n\n${para}`
+      } else {
+        chunks.push(bucket)
+        bucket = para
+      }
+    }
+    if (bucket) chunks.push(bucket)
+    return chunks
+  }
+
+  const translateWithArgos = async ({ text, source, target }) => {
+    const endpoint = `${getTranslateApiBase()}/translate`
+    const chunks = splitTextForTranslate(text)
+    if (!chunks.length) return ''
+
+    const translatedChunks = []
+    for (let i = 0; i < chunks.length; i += 1) {
+      setTranslateStatus(`Translating chunk ${i + 1}/${chunks.length}...`)
+      const payload = {
+        q: chunks[i],
+        source,
+        target,
+      }
+
+      let data = null
+      let lastErr = ''
+      for (let attempt = 1; attempt <= 3; attempt += 1) {
+        const controller = new AbortController()
+        const timeout = window.setTimeout(() => controller.abort(), 60_000)
+        try {
+          const response = await fetch(endpoint, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+            signal: controller.signal,
+          })
+          if (!response.ok) {
+            const err = await response.text()
+            lastErr = `Argos translation failed (${response.status}): ${err || 'unknown error'}`
+            if (response.status >= 500 && attempt < 3) {
+              await new Promise((resolve) => setTimeout(resolve, 700 * attempt))
+              continue
+            }
+            throw new Error(lastErr)
+          }
+          data = await response.json()
+          break
+        } catch (error) {
+          lastErr = error?.name === 'AbortError'
+            ? `Argos translation timed out (attempt ${attempt}/3).`
+            : (error?.message || `Argos request failed (attempt ${attempt}/3).`)
+          if (attempt < 3) {
+            await new Promise((resolve) => setTimeout(resolve, 700 * attempt))
+            continue
+          }
+          throw new Error(lastErr)
+        } finally {
+          window.clearTimeout(timeout)
+        }
+      }
+
+      if (!data) {
+        throw new Error(lastErr || 'Argos translation failed.')
+      }
+
+      const chunkText = String(data?.translatedText || '').trim()
+      if (!chunkText) {
+        throw new Error('Argos translation returned empty text.')
+      }
+      translatedChunks.push(chunkText)
+    }
+    return translatedChunks.join('\n\n')
   }
 
   const onConvert = async () => {
@@ -1345,6 +1715,57 @@ ${page.tokens
         return
       }
 
+      if (activeTool?.slug === 'ai-summarizer') {
+        const sourceFile = selectedFiles[0]
+        const apiKey = (import.meta.env.VITE_GEMINI_API_KEY || '').trim()
+        if (!apiKey) {
+          throw new Error('Gemini API key missing. Set VITE_GEMINI_API_KEY in .env.local.')
+        }
+
+        const userPrompt = aiSummaryPrompt.trim() || 'Summarize this file in simple language.'
+        setAiSummaryMessages((prev) => [
+          ...prev,
+          {
+            id: `user-${Date.now()}`,
+            role: 'user',
+            text: `${userPrompt}\n\nFile: ${sourceFile.name}`,
+          },
+        ])
+        const extractedText = (await extractTextForSummarizer(sourceFile)).trim()
+        if (!extractedText) {
+          throw new Error('No extractable text found in this file for summarization.')
+        }
+
+        const cappedText = extractedText.slice(0, 120000)
+        const prompt = [
+          'You are a document summarization assistant.',
+          `User instruction: ${userPrompt}`,
+          'Summarize the content below and return these sections:',
+          '1. TL;DR (max 3 bullet points)',
+          '2. Key points',
+          '3. Action items',
+          '4. Risks or open questions',
+          '',
+          cappedText,
+        ].join('\n')
+
+        const { summary } = await requestGeminiSummary({ apiKey, prompt })
+
+        if (!summary) {
+          throw new Error('Gemini returned an empty summary.')
+        }
+
+        setAiSummaryMessages((prev) => [
+          ...prev,
+          {
+            id: `assistant-${Date.now()}`,
+            role: 'assistant',
+            text: summary,
+          },
+        ])
+        return
+      }
+
       if (activeTool?.slug === 'word-to-pdf') {
         const sourceFile = selectedFiles[0]
         const raw = await sourceFile.arrayBuffer()
@@ -1689,6 +2110,30 @@ ${page.tokens
         return
       }
 
+      if (activeTool?.slug === 'translate-pdf') {
+        if (!translateTargetOptions.length) {
+          throw new Error('No installed Argos target languages available for this source language.')
+        }
+        if (translateSourceLang !== 'auto' && translateSourceLang === translateTargetLang) {
+          throw new Error('Source and target languages must be different.')
+        }
+        const sourceFile = selectedFiles[0]
+        const extractedText = (await extractTextForSummarizer(sourceFile)).trim()
+        if (!extractedText) {
+          throw new Error('No extractable text found in this file for translation.')
+        }
+        setTranslatedText('')
+        setTranslateStatus('Translating with Argos...')
+        const translated = await translateWithArgos({
+          text: extractedText.slice(0, 180000),
+          source: translateSourceLang,
+          target: translateTargetLang,
+        })
+        setTranslatedText(translated)
+        setTranslateStatus('Translation ready.')
+        return
+      }
+
       throw new Error(`Conversion not implemented yet for ${activeTool?.title || 'this tool'}.`)
     } catch (error) {
       if (activeTool?.slug === 'pdf-to-word') {
@@ -1707,6 +2152,15 @@ ${page.tokens
         window.alert(error?.message || 'Could not convert Excel to PDF.')
       } else if (activeTool?.slug === 'jpg-to-pdf') {
         window.alert(error?.message || 'Could not convert JPG to PDF.')
+      } else if (activeTool?.slug === 'ai-summarizer') {
+        setAiSummaryMessages((prev) => [
+          ...prev,
+          { id: `assistant-${Date.now()}`, role: 'assistant', text: `Error: ${error?.message || 'Could not generate summary.'}` },
+        ])
+        window.alert(error?.message || 'Could not generate AI summary.')
+      } else if (activeTool?.slug === 'translate-pdf') {
+        setTranslateStatus('')
+        window.alert(error?.message || 'Could not translate file.')
       } else {
         window.alert(error?.message || 'Could not complete conversion.')
       }
@@ -3092,6 +3546,23 @@ ${page.tokens
     return [from, to]
   }, [splitFromPage, splitMode, splitToPage, splitTotalPages])
 
+  const translateTargetOptions = useMemo(() => {
+    if (translateSourceLang === 'auto') {
+      return translateLanguages.filter((lang) => lang.code !== 'auto')
+    }
+    const src = translateLanguages.find((lang) => lang.code === translateSourceLang)
+    const supported = new Set(src?.targets || [])
+    return translateLanguages.filter((lang) => lang.code !== 'auto' && supported.has(lang.code))
+  }, [translateLanguages, translateSourceLang])
+
+  useEffect(() => {
+    if (activeTool?.slug !== 'translate-pdf') return
+    if (!translateTargetOptions.length) return
+    if (!translateTargetOptions.some((lang) => lang.code === translateTargetLang)) {
+      setTranslateTargetLang(translateTargetOptions[0].code)
+    }
+  }, [activeTool?.slug, translateTargetLang, translateTargetOptions])
+
   return (
     <div className="page">
       <header className="topbar">
@@ -3113,14 +3584,6 @@ ${page.tokens
           ))}
         </nav>
 
-        <div className="auth-actions">
-          <button type="button" className="login-btn">
-            Login
-          </button>
-          <button type="button" className="signup-btn">
-            Sign up
-          </button>
-        </div>
       </header>
 
       <main className={`content-wrap ${activeTool ? 'tool-layout' : ''}`}>
@@ -3141,12 +3604,14 @@ ${page.tokens
                           ? 'compare-mode'
                           : activeTool?.slug === 'crop-pdf'
                             ? 'crop-mode'
-                            : activeTool?.slug === 'scan-to-pdf'
+                          : activeTool?.slug === 'scan-to-pdf'
                               ? 'scan-mode'
                             : activeTool?.slug === 'pdf-to-jpg'
                               ? 'pdf-jpg-mode'
                             : activeTool?.slug === 'html-to-pdf'
                               ? 'html-mode'
+                            : activeTool?.slug === 'ai-summarizer'
+                              ? 'ai-mode'
                         : ''
             }`}
             aria-label={`${activeTool.title} page`}
@@ -3170,7 +3635,57 @@ ${page.tokens
                 onChange={onInputChange}
               />
 
-              {activeTool.slug === 'merge-pdf' && mergedFileUrl ? (
+              {activeTool.slug === 'ai-summarizer' ? (
+                <section className="ai-chat-page" aria-label="AI Summarizer chat">
+                  <div className="ai-chat-header">
+                    <h2>AI Summarizer Chat</h2>
+                    <p>Upload a file, describe what you want, and generate a summary.</p>
+                  </div>
+
+                  <div className="ai-chat-messages">
+                    {aiSummaryMessages.map((msg) => (
+                      <article key={msg.id} className={`ai-chat-bubble ${msg.role}`}>
+                        <p>{msg.text}</p>
+                      </article>
+                    ))}
+                  </div>
+
+                  <div className="ai-chat-composer">
+                    <div className="ai-chat-inputbar">
+                      <button type="button" className="ai-plus-btn" onClick={openFilePicker} aria-label="Upload file">
+                        +
+                      </button>
+                      <input
+                        type="text"
+                        className="ai-chat-inline-input"
+                        value={aiSummaryPrompt}
+                        onChange={(event) => setAiSummaryPrompt(event.target.value)}
+                        placeholder="Ask anything"
+                      />
+                      <button type="button" className="ai-send-btn" onClick={onConvert} disabled={isMerging || !selectedFiles.length}>
+                        {isMerging ? '...' : 'Summarize'}
+                      </button>
+                    </div>
+                    <div className="ai-chat-actions">
+                      <div className="ai-file-list">
+                        {selectedFiles.length ? selectedFiles.map((file, index) => (
+                          <div key={`${file.name}-${index}`} className="ai-file-chip">
+                            <span>{file.name}</span>
+                            <button type="button" onClick={() => removeFileAt(index)} aria-label={`Remove ${file.name}`}>
+                              x
+                            </button>
+                          </div>
+                        )) : <p className="ai-file-empty">No file selected.</p>}
+                      </div>
+                      <div className="ai-chat-action-buttons">
+                        <button type="button" className="ai-secondary-btn" onClick={downloadSummaryChat} disabled={!aiSummaryMessages.length}>
+                          Download Chat
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                </section>
+              ) : activeTool.slug === 'merge-pdf' && mergedFileUrl ? (
                 <section className="merge-result-page" aria-label="Merge complete">
                   <h2>PDFs have been merged!</h2>
                   <div className="merge-result-actions">
@@ -4416,7 +4931,54 @@ ${page.tokens
 
                     <aside className="workspace-sidebar">
                       <h2>{activeTool.title}</h2>
-                      <div className="workspace-empty" />
+                      {activeTool.slug === 'translate-pdf' ? (
+                        <div className="translate-panel">
+                          <label htmlFor="translate-source">Source language</label>
+                          <select
+                            id="translate-source"
+                            value={translateSourceLang}
+                            onChange={(event) => setTranslateSourceLang(event.target.value)}
+                          >
+                            {translateLanguages.map((lang) => (
+                              <option key={`src-${lang.code}`} value={lang.code}>
+                                {lang.label}
+                              </option>
+                            ))}
+                          </select>
+
+                          <label htmlFor="translate-target">Target language</label>
+                          <select
+                            id="translate-target"
+                            value={translateTargetLang}
+                            onChange={(event) => setTranslateTargetLang(event.target.value)}
+                            disabled={!translateTargetOptions.length}
+                          >
+                            {translateTargetOptions.map((lang) => (
+                              <option key={`target-${lang.code}`} value={lang.code}>
+                                {lang.label}
+                              </option>
+                            ))}
+                          </select>
+
+                          <p className="translate-status">{translateStatus || 'Ready to translate'}</p>
+                          <textarea
+                            readOnly
+                            className="translate-output"
+                            value={translatedText}
+                            placeholder="Translated text will appear here."
+                          />
+                          <button
+                            type="button"
+                            className="translate-download-btn"
+                            onClick={downloadTranslatedResult}
+                            disabled={!translatedText.trim()}
+                          >
+                            Download translation
+                          </button>
+                        </div>
+                      ) : (
+                        <div className="workspace-empty" />
+                      )}
                       <button type="button" className="convert-main-btn" onClick={onConvert} disabled={isMerging}>
                         {isMerging ? 'Processing...' : convertLabel}
                       </button>
