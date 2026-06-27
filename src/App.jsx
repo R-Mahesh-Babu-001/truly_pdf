@@ -10,6 +10,30 @@ import pdfjsWorker from 'pdfjs-dist/build/pdf.worker?url'
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfjsWorker
 
+const CHATIFY_MESSAGE_TYPE = 'chatify:pdf-result'
+const CHATIFY_ALLOWED_ORIGINS = new Set([
+  'http://localhost:5173',
+  'http://127.0.0.1:5173',
+  'https://chatify-1-6nr8.onrender.com',
+  'https://chatify-frontend-3uzh.onrender.com',
+])
+
+const getChatifyBridge = () => {
+  const params = new URLSearchParams(window.location.search)
+  const targetOrigin = params.get('chatifyOrigin')
+  const operationId = params.get('chatifyOperationId')
+
+  if (!window.opener || !targetOrigin || !operationId) return null
+
+  try {
+    const normalizedOrigin = new URL(targetOrigin).origin
+    if (!CHATIFY_ALLOWED_ORIGINS.has(normalizedOrigin)) return null
+    return { targetOrigin: normalizedOrigin, operationId }
+  } catch {
+    return null
+  }
+}
+
 const categoryRoutes = [
   { label: 'All PDF Tools', path: '/', key: 'all' },
   { label: 'Convert', path: '/convert', key: 'convert' },
@@ -263,9 +287,26 @@ function App() {
   const scanCaptureCanvasRef = useRef(null)
   const scanUploadInputRef = useRef(null)
   const scanStreamRef = useRef(null)
+  const chatifyBridgeRef = useRef(getChatifyBridge())
+  const addFilesRef = useRef(null)
 
   const downloadBlob = (blobLike, filename) => {
     const blob = blobLike instanceof Blob ? blobLike : new Blob([blobLike])
+    const bridge = chatifyBridgeRef.current
+    if (bridge) {
+      window.opener.postMessage(
+        {
+          type: CHATIFY_MESSAGE_TYPE,
+          operationId: bridge.operationId,
+          toolSlug: activeTool?.slug || '',
+          filename,
+          fileType: blob.type || 'application/octet-stream',
+          fileSize: blob.size,
+          blob,
+        },
+        bridge.targetOrigin,
+      )
+    }
     if (typeof fileSaver?.saveAs === 'function') {
       fileSaver.saveAs(blob, filename)
       return
@@ -279,6 +320,25 @@ function App() {
     document.body.removeChild(link)
     window.setTimeout(() => URL.revokeObjectURL(url), 60_000)
   }
+
+  const downloadBlobUrl = async (url, filename) => {
+    const response = await fetch(url)
+    const blob = await response.blob()
+    downloadBlob(blob, filename)
+  }
+
+  useEffect(() => {
+    const bridge = chatifyBridgeRef.current
+    if (!bridge) return
+
+    window.opener.postMessage(
+      {
+        type: 'chatify:pdf-ready',
+        operationId: bridge.operationId,
+      },
+      bridge.targetOrigin,
+    )
+  }, [])
 
   useEffect(() => {
     const onPopState = () => setPathname(window.location.pathname)
@@ -800,6 +860,24 @@ function App() {
       return next
     })
   }
+
+  addFilesRef.current = addFiles
+
+  useEffect(() => {
+    const bridge = chatifyBridgeRef.current
+    if (!bridge) return undefined
+
+    const onChatifyMessage = (event) => {
+      if (event.origin !== bridge.targetOrigin) return
+      if (event.data?.type !== 'chatify:pdf-input') return
+      if (event.data?.operationId !== bridge.operationId) return
+      if (!(event.data?.file instanceof File)) return
+      addFilesRef.current?.([event.data.file])
+    }
+
+    window.addEventListener('message', onChatifyMessage)
+    return () => window.removeEventListener('message', onChatifyMessage)
+  }, [])
 
   const onInputChange = (event) => {
     addFiles(event.target.files)
@@ -1470,14 +1548,8 @@ ${page.tokens
 </html>`
 
         const blob = new Blob(['\ufeff', html], { type: 'application/msword;charset=utf-8' })
-        const url = URL.createObjectURL(blob)
-        const link = document.createElement('a')
-        link.href = url
-        link.download = `${sourceFile.name.replace(/\.pdf$/i, '') || 'converted'}-pdf-to-word.doc`
-        document.body.appendChild(link)
-        link.click()
-        document.body.removeChild(link)
-        window.setTimeout(() => URL.revokeObjectURL(url), 60_000)
+        const filename = `${sourceFile.name.replace(/\.pdf$/i, '') || 'converted'}-pdf-to-word.doc`
+        downloadBlob(blob, filename)
         return
       }
 
@@ -1563,14 +1635,8 @@ ${page.tokens
         }
 
         const pptBlob = await pptx.write({ outputType: 'blob' })
-        const url = URL.createObjectURL(pptBlob)
-        const link = document.createElement('a')
-        link.href = url
-        link.download = `${sourceFile.name.replace(/\.pdf$/i, '') || 'converted'}-pdf-to-powerpoint.pptx`
-        document.body.appendChild(link)
-        link.click()
-        document.body.removeChild(link)
-        window.setTimeout(() => URL.revokeObjectURL(url), 60_000)
+        const filename = `${sourceFile.name.replace(/\.pdf$/i, '') || 'converted'}-pdf-to-powerpoint.pptx`
+        downloadBlob(pptBlob, filename)
         return
       }
 
@@ -1648,14 +1714,8 @@ ${page.tokens
         const blob = new Blob([xlsxData], {
           type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
         })
-        const url = URL.createObjectURL(blob)
-        const link = document.createElement('a')
-        link.href = url
-        link.download = `${sourceFile.name.replace(/\.pdf$/i, '') || 'converted'}-pdf-to-excel.xlsx`
-        document.body.appendChild(link)
-        link.click()
-        document.body.removeChild(link)
-        window.setTimeout(() => URL.revokeObjectURL(url), 60_000)
+        const filename = `${sourceFile.name.replace(/\.pdf$/i, '') || 'converted'}-pdf-to-excel.xlsx`
+        downloadBlob(blob, filename)
         return
       }
 
@@ -2763,14 +2823,8 @@ ${page.tokens
 
       const bytes = await pdf.save({ useObjectStreams: false })
       const blob = new Blob([bytes], { type: 'application/pdf' })
-      const url = URL.createObjectURL(blob)
-      const link = document.createElement('a')
-      link.href = url
-      link.download = `cropped-${Date.now()}-${selectedCropFile.name || 'document.pdf'}`
-      document.body.appendChild(link)
-      link.click()
-      document.body.removeChild(link)
-      window.setTimeout(() => URL.revokeObjectURL(url), 60_000)
+      const filename = `cropped-${Date.now()}-${selectedCropFile.name || 'document.pdf'}`
+      downloadBlob(blob, filename)
       setCropStatus('Cropped PDF downloaded.')
     } catch (error) {
       setCropStatus(`Could not crop PDF: ${error?.message || 'unknown error'}`)
@@ -2875,14 +2929,8 @@ ${page.tokens
 
       const bytes = await pdf.save({ useObjectStreams: false })
       const blob = new Blob([bytes], { type: 'application/pdf' })
-      const url = URL.createObjectURL(blob)
-      const link = document.createElement('a')
-      link.href = url
-      link.download = `numbered-${Date.now()}-${targetFile.name || 'document.pdf'}`
-      document.body.appendChild(link)
-      link.click()
-      document.body.removeChild(link)
-      window.setTimeout(() => URL.revokeObjectURL(url), 60_000)
+      const filename = `numbered-${Date.now()}-${targetFile.name || 'document.pdf'}`
+      downloadBlob(blob, filename)
       setPageNumStatus('Page numbers burned into PDF and downloaded.')
     } catch (error) {
       setPageNumStatus(`Could not add page numbers: ${error?.message || 'unknown error'}`)
@@ -2914,14 +2962,7 @@ ${page.tokens
       ...lines,
     ].join('\n')
     const blob = new Blob([body], { type: 'text/plain;charset=utf-8' })
-    const url = URL.createObjectURL(blob)
-    const link = document.createElement('a')
-    link.href = url
-    link.download = `compare-report-${Date.now()}.txt`
-    document.body.appendChild(link)
-    link.click()
-    document.body.removeChild(link)
-    window.setTimeout(() => URL.revokeObjectURL(url), 60_000)
+    downloadBlob(blob, `compare-report-${Date.now()}.txt`)
   }
 
   const rotateFile = (index, delta) => {
@@ -2963,14 +3004,8 @@ ${page.tokens
         }
         const bytes = await pdf.save({ useObjectStreams: false })
         const blob = new Blob([bytes], { type: 'application/pdf' })
-        const url = URL.createObjectURL(blob)
-        const link = document.createElement('a')
-        link.href = url
-        link.download = `rotated-${Date.now()}-${file.name || 'document.pdf'}`
-        document.body.appendChild(link)
-        link.click()
-        document.body.removeChild(link)
-        window.setTimeout(() => URL.revokeObjectURL(url), 60_000)
+        const filename = `rotated-${Date.now()}-${file.name || 'document.pdf'}`
+        downloadBlob(blob, filename)
       }
       setRotateStatus('Rotated PDF downloaded.')
     } catch (error) {
@@ -3107,14 +3142,8 @@ ${page.tokens
 
       const bytes = await out.save({ useObjectStreams: false })
       const blob = new Blob([bytes], { type: 'application/pdf' })
-      const url = URL.createObjectURL(blob)
-      const link = document.createElement('a')
-      link.href = url
-      link.download = `organized-${Date.now()}-${selectedFiles[0].name || 'document.pdf'}`
-      document.body.appendChild(link)
-      link.click()
-      document.body.removeChild(link)
-      window.setTimeout(() => URL.revokeObjectURL(url), 60_000)
+      const filename = `organized-${Date.now()}-${selectedFiles[0].name || 'document.pdf'}`
+      downloadBlob(blob, filename)
       setOrganizeStatus('Organized PDF downloaded.')
     } catch (error) {
       setOrganizeStatus(`Could not organize PDF: ${error?.message || 'unknown error'}`)
@@ -3498,14 +3527,8 @@ ${page.tokens
 
       const bytes = await out.save({ useObjectStreams: false })
       const blob = new Blob([bytes], { type: 'application/pdf' })
-      const url = URL.createObjectURL(blob)
-      const link = document.createElement('a')
-      link.href = url
-      link.download = `edited-${Date.now()}-${selectedEditFile.name || 'document.pdf'}`
-      document.body.appendChild(link)
-      link.click()
-      document.body.removeChild(link)
-      window.setTimeout(() => URL.revokeObjectURL(url), 60_000)
+      const filename = `edited-${Date.now()}-${selectedEditFile.name || 'document.pdf'}`
+      downloadBlob(blob, filename)
       if (appliedObjects === 0) {
         setEditStatus('Downloaded PDF, but no edits were detected to save.')
       } else if (skippedPages > 0) {
@@ -3692,9 +3715,13 @@ ${page.tokens
                     <button type="button" className="back-round-btn" onClick={resetMergeResult} aria-label="Back">
                       ←
                     </button>
-                    <a className="download-merged-btn" href={mergedFileUrl} download={mergedFileName}>
+                    <button
+                      type="button"
+                      className="download-merged-btn"
+                      onClick={() => downloadBlobUrl(mergedFileUrl, mergedFileName)}
+                    >
                       Download merged PDF
-                    </a>
+                    </button>
                     <div className="result-mini-actions">
                       <button
                         type="button"
@@ -4072,9 +4099,13 @@ ${page.tokens
                         <button type="button" className="back-round-btn" onClick={resetSplitResult} aria-label="Back">
                           ←
                         </button>
-                        <a className="download-merged-btn" href={splitResultUrl} download={splitResultName}>
+                        <button
+                          type="button"
+                          className="download-merged-btn"
+                          onClick={() => downloadBlobUrl(splitResultUrl, splitResultName)}
+                        >
                           Download split PDF
-                        </a>
+                        </button>
                       </div>
                     </section>
                   ) : (
