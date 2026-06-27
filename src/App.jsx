@@ -22,13 +22,16 @@ const getChatifyBridge = () => {
   const params = new URLSearchParams(window.location.search)
   const targetOrigin = params.get('chatifyOrigin')
   const operationId = params.get('chatifyOperationId')
+  const targetWindow =
+    window.opener ||
+    (window.parent && window.parent !== window ? window.parent : null)
 
-  if (!window.opener || !targetOrigin || !operationId) return null
+  if (!targetWindow || !targetOrigin || !operationId) return null
 
   try {
     const normalizedOrigin = new URL(targetOrigin).origin
     if (!CHATIFY_ALLOWED_ORIGINS.has(normalizedOrigin)) return null
-    return { targetOrigin: normalizedOrigin, operationId }
+    return { targetOrigin: normalizedOrigin, operationId, targetWindow }
   } catch {
     return null
   }
@@ -308,7 +311,7 @@ function App() {
     const blob = blobLike instanceof Blob ? blobLike : new Blob([blobLike])
     const bridge = chatifyBridgeRef.current
     if (bridge) {
-      window.opener.postMessage(
+      bridge.targetWindow.postMessage(
         {
           type: CHATIFY_MESSAGE_TYPE,
           operationId: bridge.operationId,
@@ -345,7 +348,7 @@ function App() {
     const bridge = chatifyBridgeRef.current
     if (!bridge) return
 
-    window.opener.postMessage(
+    bridge.targetWindow.postMessage(
       {
         type: 'chatify:pdf-ready',
         operationId: bridge.operationId,
