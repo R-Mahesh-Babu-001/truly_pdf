@@ -34,6 +34,20 @@ const getChatifyBridge = () => {
   }
 }
 
+const getInitialPathname = () => {
+  const params = new URLSearchParams(window.location.search)
+  const chatifyTool = params.get('chatifyTool')
+
+  if (chatifyTool?.startsWith('/tool/')) {
+    const slug = chatifyTool.slice('/tool/'.length)
+    if (tools.some((tool) => tool.slug === slug)) {
+      return chatifyTool
+    }
+  }
+
+  return window.location.pathname
+}
+
 const categoryRoutes = [
   { label: 'All PDF Tools', path: '/', key: 'all' },
   { label: 'Convert', path: '/convert', key: 'convert' },
@@ -170,7 +184,7 @@ function getRouteState(pathname) {
 }
 
 function App() {
-  const [pathname, setPathname] = useState(window.location.pathname)
+  const [pathname, setPathname] = useState(getInitialPathname)
   const [selectedFiles, setSelectedFiles] = useState([])
   const [isDragOver, setIsDragOver] = useState(false)
   const [draggingIndex, setDraggingIndex] = useState(null)
